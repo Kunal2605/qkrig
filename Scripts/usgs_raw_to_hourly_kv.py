@@ -430,7 +430,12 @@ def main() -> int:
                         append_kv_fail(kv, sid, "missing")
                         fail += 1
                 else:
-                    reason = "missing" if pd.isna(row["mm_hr"]) else "invalid_area"
+                    if row["n_readings"] < min_readings:
+                        reason = f"insufficient_readings (n={int(row['n_readings'])} < {min_readings})"
+                    elif pd.isna(row["mm_hr"]):
+                        reason = "missing"
+                    else:
+                        reason = "invalid_area"
                     append_kv_fail(kv, sid, reason)
                     fail += 1
 
