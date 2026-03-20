@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
                    help="Optional end date (YYYY-MM-DD) to restrict output.")
     p.add_argument("--overwrite", action="store_true",
                    help="Remove existing KV/log files in date range before writing.")
-    p.add_argument("--min-readings", type=int, default=2,
+    p.add_argument("--min-readings", type=int, default=1,
                    help="Minimum number of 15-min readings required to compute an hourly mean (default: 2).")
 
     # Metadata parsing controls
@@ -328,6 +328,7 @@ def main() -> int:
     # Track per-hour counts for human logs
     hr_counts: Dict[str, Dict[str, int]] = {}       # {hr_str: {"total": X, "ok": Y, "fail": Z}}
     hr_successes: Dict[str, List] = {}               # {hr_str: [(site_id, lon, lat, mm), ...]}
+    hr_sites: Dict[str, set] = {}                    # {hr_str: set of site_ids already written}
 
     for i, fname in enumerate(raw_files, 1):
         fpath = os.path.join(args.raw_dir, fname)
@@ -415,27 +416,21 @@ def main() -> int:
 
             for _, row in grp.iterrows():
                 sid = str(row["site_id"])
+                hr_sites.setdefault(hr_str, set()).add(sid)
                 total += 1
                 if bool(row["ok_flag"]):
                     val = float(row["mm_hr"])
                     lon = float(row["gauge_lon"])
                     lat = float(row["gauge_lat"])
-                    n = int(row["n_readings"])
-                    # Sanity bounds for hourly flow
-                    if np.isfinite(val) and -20 <= val <= 20:
+                    if np.isfinite(val):
                         append_kv_ok(kv, sid, lon, lat, val)
                         ok += 1
                         succ_for_log.append((sid, lon, lat, val))
                     else:
-                        append_kv_fail(kv, sid, f"large_magnitude_flow (mean_cfs={row['mean_cfs']:.2f} n={n})")
+                        append_kv_fail(kv, sid, "missing")
                         fail += 1
                 else:
-                    if row["n_readings"] < min_readings:
-                        reason = f"insufficient_readings (n={int(row['n_readings'])} < {min_readings})"
-                    elif pd.isna(row["mm_hr"]):
-                        reason = "missing"
-                    else:
-                        reason = "invalid_area"
+                    reason = "missing" if pd.isna(row["mm_hr"]) else "invalid_area"
                     append_kv_fail(kv, sid, reason)
                     fail += 1
 
