@@ -82,6 +82,8 @@ class USGSLoader(BaseLoader):
             }
         )
         df = df[["gauge_id", "gauge_lat", "gauge_lon", "area_km2"]].dropna()
+        # USGS drain_area_va is in sq miles — convert to sq km
+        df["area_km2"] = df["area_km2"] * 2.58999
 
         # Filter by optional site list
         site_list_file = dcfg.get("site_list_file")
@@ -102,6 +104,7 @@ class USGSLoader(BaseLoader):
                     "drain_area_va": "area_km2",
                 }
             )[["gauge_id", "gauge_lat", "gauge_lon", "area_km2"]].dropna()
+            all_sites["area_km2"] = all_sites["area_km2"] * 2.58999
             current = set(df["gauge_id"])
             candidates = all_sites[~all_sites["gauge_id"].isin(current)]
             sample_n = min(add_random, len(candidates))

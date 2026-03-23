@@ -147,6 +147,8 @@ def load_metadata(meta_path: str, sep: Optional[str] = None, on_bad_lines: str =
     df["gauge_lon"] = pd.to_numeric(df["gauge_lon"], errors="coerce")
     df["gauge_lat"] = pd.to_numeric(df["gauge_lat"], errors="coerce")
     df["area_km2"] = pd.to_numeric(df["area_km2"], errors="coerce")
+    # USGS drain_area_va is in sq miles — convert to sq km
+    df["area_km2"] = df["area_km2"] * 2.58999
     df = df.dropna(subset=["gauge_lon", "gauge_lat", "area_km2"])
     return df.set_index("gauge_id")
 

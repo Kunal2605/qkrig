@@ -58,8 +58,10 @@ def parse_args() -> argparse.Namespace:
                    help="Optional end date (YYYY-MM-DD) to restrict output.")
     p.add_argument("--overwrite", action="store_true",
                    help="Remove existing KV/log files in date range before writing.")
-    p.add_argument("--min-readings", type=int, default=1,
-                   help="Minimum number of 15-min readings required to compute an hourly mean (default: 2).")
+    p.add_argument("--site-list", default=None,
+                   help="Optional text file with one site ID per line. Only these sites will appear in output.")
+    p.add_argument("--min-readings", type=int, default=0,
+                   help="Minimum number of 15-min readings required to compute an hourly mean (default: 0 = use all).")
 
     # Metadata parsing controls
     p.add_argument("--meta-sep", default=None,
@@ -193,6 +195,7 @@ def load_metadata(
     # Flexible renames
     rename_map = {
         "site_no": "gauge_id",
+        "0site_no": "gauge_id",
         "gauge_id": "gauge_id",
         "dec_long_va": "gauge_lon",
         "gauge_lon": "gauge_lon",
@@ -207,11 +210,13 @@ def load_metadata(
     if missing:
         raise ValueError(f"Metadata missing columns: {missing}. Have: {df.columns.tolist()}")
 
-    df["gauge_id"] = df["gauge_id"].astype(str).str.strip().str.zfill(8)
+    df["gauge_id"] = df["gauge_id"].astype(str).str.strip()
     df["gauge_lon"] = pd.to_numeric(df["gauge_lon"], errors="coerce")
     df["gauge_lat"] = pd.to_numeric(df["gauge_lat"], errors="coerce")
     df["area_km2"] = pd.to_numeric(df["area_km2"], errors="coerce")
-    df = df.dropna(subset=["gauge_lon", "gauge_lat", "area_km2"])
+    # USGS drain_area_va is in sq miles — convert to sq km
+    df["area_km2"] = df["area_km2"] * 2.58999
+    df = df.dropna(subset=["gauge_lon", "gauge_lat"])
     return df.set_index("gauge_id")
 
 
@@ -314,6 +319,13 @@ def main() -> int:
     meta = load_metadata(args.metadata, sep=args.meta_sep, on_bad_lines=args.on_bad_lines)
     print(f"Loaded metadata for {len(meta)} sites.")
 
+    # Optional site list filter
+    if args.site_list and os.path.exists(args.site_list):
+        with open(args.site_list, "r") as f:
+            wanted = {line.strip() for line in f if line.strip() and not line.startswith("#")}
+        meta = meta[meta.index.isin(wanted)]
+        print(f"Filtered to {len(meta)} sites from site list.")
+
     # Find .rdb files
     raw_files = [
         f for f in os.listdir(args.raw_dir)
@@ -351,7 +363,7 @@ def main() -> int:
             continue
 
         # Normalize
-        df["site_id"] = df["site_no"].astype(str).str.strip().str.zfill(8)
+        df["site_id"] = df["site_no"].astype(str).str.strip()
         df["dt"] = pd.to_datetime(df["datetime"], errors="coerce")
         df = df.dropna(subset=["dt"])
 
@@ -432,6 +444,8 @@ def main() -> int:
                 else:
                     if row["n_readings"] < min_readings:
                         reason = f"insufficient_readings (n={int(row['n_readings'])} < {min_readings})"
+                    elif pd.isna(row.get("area_km2")):
+                        reason = "missing_drainage_area"
                     elif pd.isna(row["mm_hr"]):
                         reason = "missing"
                     else:
