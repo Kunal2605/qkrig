@@ -60,6 +60,8 @@ def parse_args() -> argparse.Namespace:
                    help="Remove existing KV/log files in date range before writing.")
     p.add_argument("--site-list", default=None,
                    help="Optional text file with one site ID per line. Only these sites will appear in output.")
+    p.add_argument("--bbox", nargs=4, type=float, metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"),
+                   help="Bounding box filter: min_lon min_lat max_lon max_lat")
     p.add_argument("--min-readings", type=int, default=0,
                    help="Minimum number of 15-min readings required to compute an hourly mean (default: 0 = use all).")
 
@@ -325,6 +327,16 @@ def main() -> int:
             wanted = {line.strip() for line in f if line.strip() and not line.startswith("#")}
         meta = meta[meta.index.isin(wanted)]
         print(f"Filtered to {len(meta)} sites from site list.")
+
+    # Optional bbox filter
+    if args.bbox:
+        min_lon, min_lat, max_lon, max_lat = args.bbox
+        before = len(meta)
+        meta = meta[
+            (meta["gauge_lon"] >= min_lon) & (meta["gauge_lon"] <= max_lon) &
+            (meta["gauge_lat"] >= min_lat) & (meta["gauge_lat"] <= max_lat)
+        ]
+        print(f"Bbox filter: {before} → {len(meta)} sites within [{min_lon},{min_lat},{max_lon},{max_lat}]")
 
     # Find .rdb files
     raw_files = [
