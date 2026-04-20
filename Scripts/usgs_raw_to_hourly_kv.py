@@ -416,6 +416,7 @@ def main() -> int:
 
         # Parse CFS values
         df["cfs"] = pd.to_numeric(df[flow_col], errors="coerce")
+        df.loc[df["cfs"] < 0, "cfs"] = np.nan
 
         # Floor UTC timestamps to the hour for grouping
         df["hour"] = df["dt"].dt.floor("h")
@@ -442,6 +443,7 @@ def main() -> int:
         hourly["mm_hr"] = mm_hr
         hourly["ok_flag"] = (
             np.isfinite(mm_hr)
+            & (hourly["mean_cfs"] >= 0)
             & (area_m2 > 0)
             & (hourly["n_readings"] >= min_readings)
         )
