@@ -150,7 +150,7 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
     if site_list_file and os.path.exists(site_list_file):
         with open(site_list_file, "r") as f:
             wanted = {line.strip().lstrip("0") for line in f if line.strip()}
-            df = df[df["gauge_id"].str.lstrip("0").isin(wanted)]
+          df = df[df["gauge_id"].str.lstrip("0").isin(wanted)]
 
     # Optional area filter
     min_area = float(scfg.get("min_area_km2", 0.0))
