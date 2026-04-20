@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 from interpolation.usgs_krig import USGSKrig
 
 
@@ -149,8 +150,8 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
     site_list_file = dcfg.get("site_list_file")
     if site_list_file and os.path.exists(site_list_file):
         with open(site_list_file, "r") as f:
-            wanted = {line.strip() for line in f if line.strip()}
-        df = df[df["gauge_id"].isin(wanted)]
+            wanted = {line.strip().lstrip("0") for line in f if line.strip()}
+        df = df[df["gauge_id"].str.lstrip("0").isin(wanted)]
 
     # Optional area filter
     min_area = float(scfg.get("min_area_km2", 0.0))
@@ -205,6 +206,7 @@ def fetch_site_iv(
             out = df[[cols[0]]].copy()
             out = out.rename(columns={cols[0]: "cfs"})
             out["cfs"] = pd.to_numeric(out["cfs"], errors="coerce")
+            out.loc[out["cfs"] < 0, "cfs"] = np.nan
 
             if not isinstance(out.index, pd.DatetimeIndex):
                 out.index = pd.to_datetime(out.index)
@@ -223,7 +225,7 @@ def fetch_and_cache_all_hours(
     meta: pd.DataFrame,
     kv_dir: str,
     year: int, month: int, day: int,
-    min_readings: int = 2,
+    min_readings: int = 1,
 ) -> None:
     """
     Fetch IV data from NWIS for ALL sites for one day, compute hourly means,
@@ -294,12 +296,12 @@ def fetch_and_cache_all_hours(
             hour_df = df[mask].dropna(subset=["cfs"])
 
             if len(hour_df) < min_readings:
-                failures.append((sid, f"insufficient_readings (n={len(hour_df)} < {min_readings})"))
+                failures.append((sid, "missing"))
                 continue
 
             mean_cfs = float(hour_df["cfs"].mean())
             if not np.isfinite(mean_cfs):
-                failures.append((sid, "nonfinite_mean"))
+                failures.append((sid, "missing"))
                 continue
 
             # CFS → mm/hr (drain_area_va is in sq miles, convert to m²)
@@ -307,7 +309,7 @@ def fetch_and_cache_all_hours(
             mm_hr = (mean_cfs * 0.0283168 * 3600.0 / area_m2) * 1000.0
 
             if not np.isfinite(mm_hr):
-                failures.append((sid, "nonfinite_value"))
+                failures.append((sid, "missing"))
                 continue
 
             successes.append((lon, lat, mm_hr, sid))
@@ -378,7 +380,7 @@ def main():
         fetch_and_cache_all_hours(
             cfg, meta, kv_dir,
             args.year, args.month, args.day,
-            min_readings=2,
+            min_readings=1,
         )
 
         # Now load the target hour's KV
