@@ -87,8 +87,8 @@ class USGSLoader(BaseLoader):
         site_list_file = dcfg.get("site_list_file")
         if site_list_file and os.path.exists(site_list_file):
             with open(site_list_file, "r") as f:
-                wanted = {line.strip() for line in f if line.strip()}
-            df = df[df["gauge_id"].isin(wanted)]
+                wanted = {line.strip().lstrip("0") for line in f if line.strip()}
+            df = df[df["gauge_id"].str.lstrip("0").isin(wanted)]
 
         # Optional add_random_sites
         add_random = int(scfg.get("add_random_sites", 0))
@@ -346,7 +346,7 @@ class USGSLoader(BaseLoader):
                     except Exception:
                         return (None, "bad_value", site_id)
 
-                    if not np.isfinite(cfs):
+                    if not np.isfinite(cfs) or cfs < 0:
                         return (None, "nonfinite_cfs", site_id)
 
                     # cfs -> mm/day
