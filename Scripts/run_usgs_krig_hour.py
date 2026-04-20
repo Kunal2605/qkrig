@@ -36,7 +36,6 @@ import numpy as np
 import pandas as pd
 import yaml
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 from interpolation.usgs_krig import USGSKrig
 
 
