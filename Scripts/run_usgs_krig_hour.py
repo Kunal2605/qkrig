@@ -129,7 +129,7 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
     """
     Load gauge metadata from config, apply site-list and bbox filters.
     Returns DataFrame indexed by gauge_id with columns:
-        gauge_lat, gauge_lon, area_km2
+        gauge_lat, gauge_lon, area_sq_mi
     """
     dcfg = cfg.get("data", {})
     scfg = cfg.get("settings", {})
@@ -140,9 +140,9 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
         "0site_no": "gauge_id",
         "dec_lat_va": "gauge_lat",
         "dec_long_va": "gauge_lon",
-        "drain_area_va": "area_km2",
+        "drain_area_va": "area_sq_mi",
     })
-    df = df[["gauge_id", "gauge_lat", "gauge_lon", "area_km2"]]
+    df = df[["gauge_id", "gauge_lat", "gauge_lon", "area_sq_mi"]]
     df = df.dropna(subset=["gauge_lon", "gauge_lat"])
 
     # Filter by optional site list
@@ -152,10 +152,10 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
             wanted = {line.strip().lstrip("0") for line in f if line.strip()}
         df = df[df["gauge_id"].str.lstrip("0").isin(wanted)]
 
-    # Optional area filter
+    # Optional area filter (min_area is in km²; column is sq mi)
     min_area = float(scfg.get("min_area_km2", 0.0))
     if min_area > 0:
-        df = df[df["area_km2"] >= min_area]
+        df = df[(df["area_sq_mi"] * 2.58999) >= min_area]
 
     # Optional bbox filter
     bbox = scfg.get("bbox")
@@ -276,12 +276,12 @@ def fetch_and_cache_all_hours(
                 row = meta.loc[sid]
                 lon = float(row["gauge_lon"])
                 lat = float(row["gauge_lat"])
-                area_km2 = float(row["area_km2"])
+                area_sq_mi = float(row["area_sq_mi"])
             except Exception:
                 failures.append((sid, "missing_metadata"))
                 continue
 
-            if not (np.isfinite(area_km2) and area_km2 > 0):
+            if not (np.isfinite(area_sq_mi) and area_sq_mi > 0):
                 failures.append((sid, "missing_drainage_area"))
                 continue
 
@@ -303,8 +303,8 @@ def fetch_and_cache_all_hours(
                 failures.append((sid, "missing"))
                 continue
 
-            # CFS → mm/hr (drain_area_va is in sq miles, convert to m²)
-            area_m2 = area_km2 * 2.58999 * 1e6
+            # Square miles -> square meters
+            area_m2 = area_sq_mi * 2.58999e6
             mm_hr = (mean_cfs * 0.0283168 * 3600.0 / area_m2) * 1000.0
 
             if not np.isfinite(mm_hr):
