@@ -1,11 +1,15 @@
 # ./configs/usgsgaugekrig.yaml
+#
+# All paths are RELATIVE to the working directory (the repo root, or
+# WORKDIR /qkrig inside the container). To persist outputs or reuse the
+# KV cache across runs, mount host volumes onto ./exports and
+# ./usgs_hourly_retrieval_logs.
 
 data:
-  metadata_file: "/home/exouser/qkrig/data/usgs_site_info.csv"
-  data_dir: "/home/exouser/data/usgskrig"
-#  site_list_file: "/Users/jmframe/qkrig/data/list_22_camels_basins_NoLeaf.txt"
-  site_list_file: "/home/exouser/qkrig/data/usgs_active_sites_Oct01_2024.txt"
-  data_cache_directory: "/media/volume/ml_ngen/usgskrig/usgs_retrieval_logs/"
+  metadata_file: "./data/usgs_site_info.csv"
+  data_dir: "./data"
+  site_list_file: "./data/usgs_active_sites_Oct01_2024.txt"
+  data_cache_directory: "./usgs_hourly_retrieval_logs"
 settings:
   date_format: "%Y %m %d"
   add_random_sites: 0
@@ -14,7 +18,7 @@ settings:
   retry_backoff_seconds: 0.75
   min_area_km2: 0
   bbox: [-125, 24, -66, 50]
-plot_config: "/home/exouser/qkrig/configs/plot_config.yaml"
+plot_config: "./configs/plot_config.yaml"
 kriging:
   grid_size: 100
   variogram_model: "spherical"
@@ -26,4 +30,4 @@ kriging:
   range: 400  # Variogram range in meters (optional)
   sill: 10
 exports:
-  directory: "/media/volume/ml_ngen/usgskrig/exports"   # where to write files
+  directory: "./exports"   # where to write files
