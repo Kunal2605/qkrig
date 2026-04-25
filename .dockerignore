@@ -1,0 +1,29 @@
+# Keep the build context small and the image clean.
+# Any of these in the working tree would otherwise be COPY'd into /qkrig.
+
+.git
+.gitignore
+.venv
+venv/
+venv.bak/
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+
+# Notebooks aren't needed at runtime in the container.
+notebooks/
+
+# Local artifacts that shouldn't ship in the image.
+exports/
+usgs_hourly_retrieval_logs/
+usgs_hourly_retrieval_logs_test/
+usgs_retrieval_logs_test/
+usgs_retrieval_logs_test_Original/
+mnt/
+*.log
+
+# IDE / OS noise
+.vscode
+.idea
+.DS_Store
