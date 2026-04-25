@@ -1,9 +1,9 @@
 FROM amazonlinux:2023 AS qkrig_base
 
 # System deps:
-#   python3.11 + pip — runtime
-#   git           — for "Option A" (git clone) build path; harmless otherwise
-#   gcc, geos-devel, proj-devel — required for cartopy / pyproj / pykrige builds
+#   python3.11 + pip + devel  — runtime + headers for cartopy source build
+#   git, tar, xz              — git clone + uv installer
+#   gcc, geos-devel, proj-devel — required by cartopy / pyproj / pykrige
 RUN dnf -y install \
         git \
         tar xz \
@@ -19,15 +19,9 @@ ENV PATH="/root/.local/bin:${PATH}"
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
+RUN git clone --depth 1 https://github.com/DualEarth/qkrig.git /qkrig
+
 WORKDIR /qkrig
-
-# --- SOURCE: Option B (COPY local working tree). Fast for dev iteration. ---
-# Build with `docker build -t qkrig:dev .` from inside the qkrig repo.
-COPY . /qkrig
-
-# --- SOURCE: Option A (git clone, reproducible). Use for the v1.0.0 release. ---
-# Comment the COPY above and uncomment below; pin a tag/commit.
-# RUN git clone --branch v1.0.0 --depth 1 https://github.com/DualEarth/qkrig.git /qkrig
 
 # Editable install of qkrig + all runtime deps into the system Python.
 # --system: skip venv (the container IS the isolation boundary).
@@ -47,6 +41,8 @@ ENV OMP_NUM_THREADS=1 \
 
 # Entry point: the hourly dispatch script.
 # Override CMD to pass [CONFIG] [START_DATE] [END_DATE]:
-#   docker run --rm qkrig:dev configs/usgsgaugekrig.yaml 2025-07-01 2025-07-01
+#   docker run --rm \
+#     -v /host/exports:/qkrig/exports \
+#     qkrig:1.0.0 configs/usgsgaugekrig.yaml 2025-07-01 2025-07-01
 ENTRYPOINT ["bash", "Scripts/dispatch_usgs_krig_range_subdaily.sh"]
 CMD ["configs/usgsgaugekrig.yaml"]
