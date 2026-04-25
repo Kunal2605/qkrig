@@ -6,7 +6,8 @@ FROM amazonlinux:2023 AS qkrig_base
 #   gcc, geos-devel, proj-devel — required for cartopy / pyproj / pykrige builds
 RUN dnf -y install \
         git \
-        python3.11 python3.11-pip \
+        tar xz \
+        python3.11 python3.11-pip python3.11-devel \
         gcc gcc-c++ make \
         geos-devel proj-devel \
     && dnf clean all \
