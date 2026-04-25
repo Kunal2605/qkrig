@@ -25,7 +25,8 @@ WORKDIR /qkrig
 
 # Editable install of qkrig + all runtime deps into the system Python.
 # --system: skip venv (the container IS the isolation boundary).
-RUN uv pip install --system -e .
+RUN uv pip install --system -e . \
+    && rm -rf /root/.cache/uv /root/.cache/pip
 
 # Outputs and KV cache live here. Mount host volumes / S3 fuse mounts to persist.
 RUN mkdir -p /qkrig/exports /qkrig/usgs_hourly_retrieval_logs
