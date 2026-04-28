@@ -27,6 +27,7 @@ FROM amazonlinux:2023 AS runtime
 RUN dnf -y install \
         python3.11 \
         geos proj \
+        findutils \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
