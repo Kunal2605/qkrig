@@ -2,9 +2,9 @@
 """
 Extract kriged streamflow for a single HOUR and append to per-catchment CSVs.
 
-Reads an hourly .npz file (interp_YYYY-MM-DD_HH.npz), samples the kriged
+Reads an hourly .nc file (interp_YYYY-MM-DD_HH.nc), samples the kriged
 grid at each catchment centroid in a .gpkg, and appends one row per
-catchment to water-year-organised CSVs.
+catchment to CSVs in the output directory.
 
 Usage:
     python qkrig_ts_hourly.py YYYY-MM-DD_HH /output_dir
@@ -12,138 +12,147 @@ Usage:
     # Example:
     python qkrig_ts_hourly.py 2024-09-26_04 /mnt/disk1/qkrig/subdaily/
 
-CSV columns: datetime, qkrig, variance
+Output files per catchment:
+    cat-{id}.csv          columns: timestep,time,qkrig_mm_hr
+    nex-{id}_output.csv   same data, space-padded columns
 """
 
 import sys, os, datetime as dt
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import xarray as xr
 
 # --- USER CONFIG ---
-GPKG_PATH    = "/mnt/disk1/usgs_streamflow_allgauges/subdaily_15min/test/"
-EXPORT_DIR   = "/mnt/disk1/usgs_streamflow_allgauges/subdaily_15min/test/usgskrig"
-LAYER        = "divides"
-ID_FIELD     = "divide_id"
-GRID_LON_KEY = "grid_lon"
-GRID_LAT_KEY = "grid_lat"
-GRID_VAL_KEY = "z_interp"
-GRID_VAR_KEY = "kriging_variance"
+GPKG_PATH  = "/home/ksarna/Documents/qkrig/hydrofabric/gage-03456100_subset.gpkg"
+EXPORT_DIR = "/home/ksarna/Documents/qkrig/exports"
+LAYER      = "divides"
+ID_FIELD   = "divide_id"    # column in the divides layer (values: 'cat-XXXXXXX')
+
 
 # --- Helpers ---
-def npz_path_for_hour(hr_str: str) -> str:
-    """Return the .npz path for an hour string like '2024-09-26_04'."""
-    return os.path.join(EXPORT_DIR, f"interp_{hr_str}.npz")
+def nc_path_for_hour(hr_str: str) -> str:
+    return os.path.join(EXPORT_DIR, f"interp_{hr_str}.nc")
 
 
-def nearest_grid_value(lons, lats, vals, pt_lon, pt_lat):
+def load_nc(nc_path: str):
+    """Return (lons, lats, z_mm_hr) from a qkrig NetCDF. Converts mm/day → mm/hr."""
+    with xr.open_dataset(nc_path) as ds:
+        lons = ds["lon"].values
+        lats = ds["lat"].values
+        z_mm_day = ds["z_interp"].values.astype(np.float64)
+    z_mm_hr = z_mm_day / 24.0
+    return lons, lats, z_mm_hr
+
+
+def sample_centroid(lons, lats, grid, pt_lon, pt_lat) -> float:
     ix = np.argmin(np.abs(lons - pt_lon))
     iy = np.argmin(np.abs(lats - pt_lat))
-    return float(vals[iy, ix])
+    val = float(grid[iy, ix])
+    return val if np.isfinite(val) else 0.0
 
 
-def grid_sample_both(npz_path, centroids):
-    with np.load(npz_path, allow_pickle=True) as z:
-        L, A = z[GRID_LON_KEY], z[GRID_LAT_KEY]
-        V, VV = z[GRID_VAL_KEY], z.get(GRID_VAR_KEY, None)
-    if VV is None:
-        return centroids.apply(lambda pt: (nearest_grid_value(L, A, V, pt.x, pt.y), np.nan))
-    return centroids.apply(lambda pt: (
-        nearest_grid_value(L, A, V, pt.x, pt.y),
-        nearest_grid_value(L, A, VV, pt.x, pt.y)
-    ))
-
-
-def water_year(d: dt.date) -> int:
-    """Return the water year for a given date (Oct 1 - Sep 30)."""
-    return d.year + 1 if d.month >= 10 else d.year
-
-
-def load_gpkg():
-    """Load all .gpkg files from GPKG_PATH (directory) or a single file."""
+def load_gpkg() -> gpd.GeoDataFrame:
+    """Load divides layer, compute WGS84 centroids."""
     if os.path.isdir(GPKG_PATH):
-        gpkg_files = [
-            os.path.join(GPKG_PATH, f)
-            for f in sorted(os.listdir(GPKG_PATH))
-            if f.endswith(".gpkg")
-        ]
+        gpkg_files = sorted(f for f in os.listdir(GPKG_PATH) if f.endswith(".gpkg"))
         if not gpkg_files:
             print(f"No .gpkg files found in {GPKG_PATH}")
             sys.exit(1)
         gdfs = []
         for gf in gpkg_files:
             try:
-                gdf = gpd.read_file(gf, layer=LAYER)
-                gdfs.append(gdf)
+                gdfs.append(gpd.read_file(os.path.join(GPKG_PATH, gf), layer=LAYER))
             except Exception as e:
                 print(f"  Warning: could not read {gf}: {e}")
         if not gdfs:
             print("No .gpkg files could be loaded")
             sys.exit(1)
-        gdf = pd.concat(gdfs, ignore_index=True)
-        gdf = gpd.GeoDataFrame(gdf, geometry="geometry")
+        gdf = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True), geometry="geometry")
     else:
         gdf = gpd.read_file(GPKG_PATH, layer=LAYER)
 
-    # Project to compute centroids, then back to WGS84
-    if gdf.crs.is_geographic:
-        gdf_proj = gdf.to_crs("EPSG:5070")
-    else:
-        gdf_proj = gdf
-    cent_proj = gdf_proj.geometry.centroid
-    gdf["centroid"] = gpd.GeoSeries(cent_proj, crs=gdf_proj.crs).to_crs(4326)
+    # Centroids in projected CRS, then convert to WGS84 for sampling
+    gdf_proj = gdf if not gdf.crs.is_geographic else gdf.to_crs("EPSG:5070")
+    gdf["centroid"] = gpd.GeoSeries(
+        gdf_proj.geometry.centroid, crs=gdf_proj.crs
+    ).to_crs(4326)
     return gdf
+
+
+def next_timestep(path: str) -> int:
+    """Return the next timestep index (count of existing data rows)."""
+    if not os.path.exists(path):
+        return 0
+    with open(path) as f:
+        return max(0, sum(1 for _ in f) - 1)  # subtract header
+
+
+def write_row(path: str, timestep: int, time_str: str, val: float, spaced: bool):
+    """Append one row; write header if file is new."""
+    new_file = not os.path.exists(path)
+    with open(path, "a") as f:
+        if new_file and not spaced:
+            f.write("timestep,time,qkrig_mm_hr\n")
+        if spaced:
+            f.write(f"{timestep}, {time_str}, {val:.6f}\n")
+        else:
+            f.write(f"{timestep},{time_str},{val:.6f}\n")
 
 
 # --- MAIN ---
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python qkrig_ts_hourly.py YYYY-MM-DD_HH /output_dir")
+    import argparse
+
+    p = argparse.ArgumentParser(description="Extract per-catchment CSVs from a qkrig NC file.")
+    p.add_argument("hr_str", help="Hour string YYYY-MM-DD_HH (e.g. 2024-09-26_04)")
+    p.add_argument("out_dir", help="Output directory for per-catchment CSVs")
+    p.add_argument("--nc",   default=None, help="Override: direct path to the .nc file")
+    p.add_argument("--gpkg", default=None, help="Override: direct path to the .gpkg file")
+    args = p.parse_args()
+
+    hr_str  = args.hr_str
+    out_dir = args.out_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Allow YYYY-MM-DD (daily) or YYYY-MM-DD_HH (hourly)
+    hour_dt = None
+    for fmt in ("%Y-%m-%d_%H", "%Y-%m-%d"):
+        try:
+            hour_dt = dt.datetime.strptime(hr_str, fmt)
+            break
+        except ValueError:
+            continue
+    if hour_dt is None:
+        print(f"Invalid date format: {hr_str}. Expected YYYY-MM-DD_HH or YYYY-MM-DD")
         sys.exit(1)
 
-    hr_str = sys.argv[1]             # e.g. "2024-09-26_04"
-    out_dir = sys.argv[2]
-
-    # Parse the hour string
-    try:
-        hour_dt = dt.datetime.strptime(hr_str, "%Y-%m-%d_%H")
-    except ValueError:
-        print(f"Invalid hour format: {hr_str}. Expected YYYY-MM-DD_HH")
-        sys.exit(1)
-
-    d = hour_dt.date()
-    h = hour_dt.hour
-
-    npz_file = npz_path_for_hour(hr_str)
-    if not os.path.exists(npz_file):
-        print(f"No NPZ file for {hr_str}, skipping")
+    nc_file = args.nc if args.nc else nc_path_for_hour(hr_str)
+    if not os.path.exists(nc_file):
+        print(f"No NC file for {hr_str}: {nc_file}, skipping")
         sys.exit(0)
 
-    # Load .gpkg catchments
+    if args.gpkg:
+        GPKG_PATH = args.gpkg
+
     gdf = load_gpkg()
-    print(f"Loaded {len(gdf)} catchments")
+    print(f"Loaded {len(gdf)} catchments from {args.gpkg or GPKG_PATH}")
 
-    # Sample hourly kriged values at centroids
-    vals = grid_sample_both(npz_file, gdf["centroid"])
-    ser_val = vals.apply(lambda x: x[0])
-    ser_var = vals.apply(lambda x: x[1])
+    lons, lats, z_mm_hr = load_nc(nc_file)
+    time_str = hour_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    wy = water_year(d)
-    wy_dir = os.path.join(out_dir, f"WY{wy}")
-    os.makedirs(wy_dir, exist_ok=True)
+    for _, row in gdf.iterrows():
+        raw_id = str(row[ID_FIELD])           # e.g. "cat-1016279"
+        num_id = raw_id.split("-")[-1]        # e.g. "1016279"
+        centroid = row["centroid"]
 
-    # Append to per-catchment CSVs (one row per hour)
-    datetime_str = hour_dt.strftime("%Y-%m-%d %H:%M")
-    for cat_id, val, var_val in zip(gdf[ID_FIELD].values, ser_val.values, ser_var.values):
-        cat_file = os.path.join(wy_dir, f"{cat_id}.csv")
-        df_hour = pd.DataFrame({
-            "datetime": [datetime_str],
-            "qkrig": [val],
-            "variance": [var_val],
-        })
-        if os.path.exists(cat_file):
-            df_hour.to_csv(cat_file, mode='a', header=False, index=False)
-        else:
-            df_hour.to_csv(cat_file, mode='w', header=True, index=False)
+        val = sample_centroid(lons, lats, z_mm_hr, centroid.x, centroid.y)
 
-    print(f"Appended hourly values for {hr_str} to WY{wy} ({len(gdf)} catchments)")
+        cat_file = os.path.join(out_dir, f"cat-{num_id}.csv")
+        nex_file = os.path.join(out_dir, f"nex-{num_id}_output.csv")
+
+        timestep = next_timestep(cat_file)
+        write_row(cat_file, timestep, time_str, val, spaced=False)
+        write_row(nex_file, timestep, time_str, val, spaced=True)
+
+    print(f"Appended {hr_str} → {len(gdf)} catchments in {out_dir}")

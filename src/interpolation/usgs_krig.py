@@ -12,8 +12,8 @@ class USGSKrig(BaseKrig):
     Delegates all plotting to vis.visualizations.
     """
 
-    def __init__(self, data, config_path, year, month, day):
-        super().__init__(data, config_path, year, month, day)
+    def __init__(self, data, config_path, year, month, day, hour=None):
+        super().__init__(data, config_path, year, month, day, hour=hour)
         self.variogram_plotter = VariogramPlotter(self)
         self.krig_map_plotter = KrigingMapPlotter(self)
 

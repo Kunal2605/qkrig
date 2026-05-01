@@ -353,9 +353,21 @@ def main():
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f) or {}
 
+    # Resolve relative paths in cfg["data"] anchored at the config file's dir
+    # (matches USGSLoader._resolve_path() behavior so this script and the
+    # loader interpret the same YAML the same way).
+    cfg_dir = os.path.dirname(os.path.abspath(args.config))
+    dcfg = cfg.setdefault("data", {})
+    for key in ("metadata_file", "site_list_file", "data_dir",
+                "data_cache_directory", "land_mask"):
+        v = dcfg.get(key)
+        if v and not os.path.isabs(v):
+            dcfg[key] = os.path.normpath(os.path.join(cfg_dir, v))
+
     scfg = cfg.get("settings", {})
-    dcfg = cfg.get("data", {})
     plot_cfg_path = args.plot_config or cfg.get("plot_config")
+    if plot_cfg_path and not os.path.isabs(plot_cfg_path):
+        plot_cfg_path = os.path.normpath(os.path.join(cfg_dir, plot_cfg_path))
 
     # Resolve KV directory
     kv_dir = args.kv_dir or dcfg.get("data_cache_directory", "usgs_hourly_retrieval_logs")
@@ -406,11 +418,9 @@ def main():
     data = [(lon, lat, mm, sid) for (lon, lat, mm, sid) in successes]
     print(f"[{hr_str}] {len(data)} observations → running kriging...")
 
-    # Create USGSKrig and override _date_str for hour-aware naming
-    krig = USGSKrig(data, args.config, args.year, args.month, args.day)
+    # Create USGSKrig with hour so filenames and attrs include HH
+    krig = USGSKrig(data, args.config, args.year, args.month, args.day, hour=args.hour)
     krig.plot_config_path = plot_cfg_path
-    krig.hour = args.hour
-    krig._date_str = lambda: hr_str
 
     # Run pipeline
     krig.compute_semivariogram()

@@ -3,12 +3,45 @@
 import os
 import numpy as np
 import yaml
+import xarray as xr
+import pandas as pd
 from pyproj import Geod
 from pykrige.ok import OrdinaryKriging
+from shapely.ops import unary_union
+from shapely.geometry import box
+import cartopy.io.shapereader as shpreader
 from typing import Optional, Tuple, Dict
 
+
+def _build_conus_mask(grid_lon: np.ndarray, grid_lat: np.ndarray) -> np.ndarray:
+    """
+    Build a boolean CONUS mask of shape (H, W) in native S→N lat order.
+    Grid points inside CONUS (with a small 0.05° buffer) are True.
+    """
+    H, W = len(grid_lat), len(grid_lon)
+    xx, yy = np.meshgrid(grid_lon, grid_lat, indexing='xy')   # (H, W)
+
+    shpfilename = shpreader.natural_earth(
+        resolution="50m", category="cultural", name="admin_0_countries"
+    )
+    geoms = [
+        rec.geometry for rec in shpreader.Reader(shpfilename).records()
+        if rec.attributes.get("NAME") == "United States of America"
+    ]
+    conus_bbox = box(float(grid_lon[0]), float(grid_lat[0]),
+                     float(grid_lon[-1]), float(grid_lat[-1]))
+    conus_geom = unary_union(geoms).intersection(conus_bbox).buffer(0.05)
+
+    # vectorised point-in-polygon
+    from shapely.vectorized import contains as _contains
+    mask = np.asarray(_contains(conus_geom, xx, yy), dtype=bool)  # (H, W)
+    if mask.shape != (H, W):
+        mask = mask.T
+    return mask
+
+
 class BaseKrig:
-    def __init__(self, data, config_path, year, month, day):
+    def __init__(self, data, config_path, year, month, day, hour=None):
         if len(data) == 0:
             raise ValueError("Input data is empty.")
 
@@ -19,14 +52,20 @@ class BaseKrig:
         self.year = year
         self.month = month
         self.day = day
+        self.hour = hour  # None for daily; int 0-23 for hourly
         self.geod = Geod(ellps="WGS84")
 
         # Load kriging config
+        config_dir = os.path.dirname(os.path.abspath(config_path))
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f) or {}
 
         kcfg = self.config.get("kriging", {}) or {}
-        self.plot_config_path = self.config.get("plot_config", None)
+        raw_plot_cfg = self.config.get("plot_config", None)
+        if raw_plot_cfg and not os.path.isabs(raw_plot_cfg):
+            self.plot_config_path = os.path.join(config_dir, raw_plot_cfg)
+        else:
+            self.plot_config_path = raw_plot_cfg
 
         land_mask_path = self.config.get("data", {}).get("land_mask")
         if land_mask_path and os.path.exists(land_mask_path):
@@ -56,8 +95,27 @@ class BaseKrig:
         self.kriging_variance: Optional[np.ndarray] = None
 
         # Semivariogram cache
-        self._semivar_cache: Optional[Tuple[np.ndarray, np.ndarray]] = None  # (bin_centers_km, semi_variance)
+        self._semivar_cache: Optional[Tuple[np.ndarray, np.ndarray]] = None
         self._semivar_bins_used: Optional[int] = None
+
+        # CONUS mask cache (built lazily on first export)
+        self._conus_mask: Optional[np.ndarray] = None
+
+    # ---------------------------------------------------------------------
+    # CONUS mask
+    # ---------------------------------------------------------------------
+    def _get_conus_mask(self) -> np.ndarray:
+        """
+        Lazily load and cache the CONUS mask (H, W) in S→N lat order.
+        Uses land_mask from config if available, otherwise builds from Natural Earth.
+        """
+        if self._conus_mask is None:
+            land_mask_path = self.config.get("data", {}).get("land_mask")
+            if land_mask_path and os.path.exists(land_mask_path):
+                self._conus_mask = np.load(land_mask_path)
+            else:
+                self._conus_mask = _build_conus_mask(self.grid_lon, self.grid_lat)
+        return self._conus_mask
 
     # ---------------------------------------------------------------------
     # Core computations
@@ -86,9 +144,7 @@ class BaseKrig:
 
     def compute_semivariogram(self, bins: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Compute and CACHE the empirical semivariogram on geodesic distances.
-        Must be called before plotting or exporting the variogram.
-
+        Compute and cache the empirical semivariogram on geodesic distances.
         Returns:
             bin_centers_km: (B,) array
             semi_variance:  (B,) array (NaN where no pairs fall in bin)
@@ -125,7 +181,6 @@ class BaseKrig:
 
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-        # Cache & record bins used
         self._semivar_cache = (bin_centers, semi_variance)
         self._semivar_bins_used = int(bins)
         return bin_centers, semi_variance
@@ -134,7 +189,6 @@ class BaseKrig:
     # Readiness helpers
     # ---------------------------------------------------------------------
     def semivariogram_ready(self, bins: Optional[int] = None) -> bool:
-        """Return True if a semivariogram is cached (and bins match if provided)."""
         if self._semivar_cache is None:
             return False
         if bins is None:
@@ -145,7 +199,10 @@ class BaseKrig:
     # Export helpers
     # ---------------------------------------------------------------------
     def _date_str(self) -> str:
-        return f"{self.year:04d}-{self.month:02d}-{self.day:02d}"
+        base = f"{self.year:04d}-{self.month:02d}-{self.day:02d}"
+        if self.hour is not None:
+            return f"{base}_{self.hour:02d}"
+        return base
 
     def _resolve_exports(self) -> str:
         exp_cfg: Dict = (self.config.get("exports") or {})
@@ -155,7 +212,7 @@ class BaseKrig:
 
     def export_all(self, bins: Optional[int] = None) -> Tuple[str, str]:
         """
-        Export both interpolation (.npz) and semivariogram (.csv) to the configured directory.
+        Export both interpolation (.nc) and semivariogram (.csv) to the configured directory.
         Requires that compute_kriging() and compute_semivariogram() were called beforehand.
         """
         if self.z_interp is None or self.kriging_variance is None:
@@ -166,7 +223,7 @@ class BaseKrig:
         export_dir = self._resolve_exports()
         d = self._date_str()
 
-        interp_path = os.path.join(export_dir, f"interp_{d}.npz")
+        interp_path = os.path.join(export_dir, f"interp_{d}.nc")
         vario_path  = os.path.join(export_dir, f"variogram_{d}.csv")
 
         self.export_interpolation(interp_path)
@@ -179,26 +236,52 @@ class BaseKrig:
     # ---------------------------------------------------------------------
     def export_interpolation(self, out_path: str):
         """
-        Export interpolation grids (z and variance) plus axes to NPZ.
+        Export interpolation grids (z and variance) to NetCDF (.nc).
+        Applies CONUS mask: points outside CONUS and negative values → NaN.
         Requires compute_kriging() beforehand.
         """
         if self.z_interp is None or self.kriging_variance is None:
             raise RuntimeError("compute_kriging() must be run before exporting interpolation.")
 
-        meta = {
-            "date": self._date_str(),
-            "variogram_model": self.variogram_model,
-            "grid_size": int(self.grid_size),
+        # Build masked copies — shape (H, W), lat S→N, lon W→E
+        conus_mask = self._get_conus_mask()
+
+        z = np.array(self.z_interp, dtype=np.float32)
+        var = np.array(self.kriging_variance, dtype=np.float32)
+
+        z[~conus_mask]   = np.nan
+        z[z < 0]         = np.nan
+        var[~conus_mask] = np.nan
+
+        # Assemble xarray Dataset
+        ds = xr.Dataset(
+            {
+                "z_interp": (["lat", "lon"], z),
+                "kriging_variance": (["lat", "lon"], var),
+            },
+            coords={
+                "lat": self.grid_lat,   # S→N (CF convention)
+                "lon": self.grid_lon,   # W→E
+            },
+        )
+
+        ds["z_interp"].attrs["units"]        = "mm/day"
+        ds["z_interp"].attrs["long_name"]    = "Kriged streamflow"
+        ds["z_interp"].attrs["lat_order"]    = "S→N (CF convention); use origin='lower' with imshow"
+        ds["kriging_variance"].attrs["long_name"] = "Kriging error variance"
+
+        ds.attrs["date"]            = f"{self.year:04d}-{self.month:02d}-{self.day:02d}"
+        if self.hour is not None:
+            ds.attrs["hour"]        = int(self.hour)
+        ds.attrs["variogram_model"] = self.variogram_model
+        ds.attrs["grid_size"]       = int(self.grid_size)
+
+        encoding = {
+            "z_interp":         {"dtype": "float32", "zlib": True, "complevel": 4},
+            "kriging_variance":  {"dtype": "float32", "zlib": True, "complevel": 4},
         }
 
-        np.savez_compressed(
-            out_path,
-            grid_lon=self.grid_lon,
-            grid_lat=self.grid_lat,
-            z_interp=self.z_interp,
-            kriging_variance=self.kriging_variance,
-            **{f"meta_{k}": v for k, v in meta.items()},
-        )
+        ds.to_netcdf(out_path, encoding=encoding)
 
     def export_variogram(self, out_path: str, bins: Optional[int] = None):
         """
@@ -227,6 +310,6 @@ class BaseKrig:
 
     def map_krig_error_variance(self):
         raise NotImplementedError("Use visualization module to plot error variance.")
-    
-    def plot_interpolation_with_variogram():
+
+    def plot_interpolation_with_variogram(self):
         raise NotImplementedError("Use visualization module to plot combo.")

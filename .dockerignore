@@ -23,6 +23,14 @@ usgs_retrieval_logs_test_Original/
 mnt/
 *.log
 
+# Local test data (gpkg subsets, reference outputs, debug images)
+gage-*_subset.gpkg
+gage-*/
+output/
+download.png
+output.png
+CLAUDE.md
+
 # IDE / OS noise
 .vscode
 .idea
