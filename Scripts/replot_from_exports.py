@@ -26,6 +26,7 @@ from datetime import datetime, date
 from typing import Optional, Tuple, List, Dict
 
 import numpy as np
+import xarray as xr
 import yaml
 
 # Project imports (works if installed with `pip install -e .`)
@@ -71,11 +72,11 @@ def list_export_pairs(exports_dir: str) -> Dict[date, Dict[str, str]]:
     """
     seen: Dict[date, Dict[str, str]] = {}
 
-    for npz in glob.glob(os.path.join(exports_dir, "interp_*.npz")):
-        dt = parse_date_from_name(npz)
+    for nc in glob.glob(os.path.join(exports_dir, "interp_*.nc")):
+        dt = parse_date_from_name(nc)
         if dt is None:
             continue
-        seen.setdefault(dt, {})["interp"] = npz
+        seen.setdefault(dt, {})["interp"] = nc
 
     for csv in glob.glob(os.path.join(exports_dir, "variogram_*.csv")):
         dt = parse_date_from_name(csv)
@@ -130,21 +131,14 @@ class RestoredKrig:
         return self._semivar_cache is not None
 
 
-def load_interp_npz(npz_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[str]]:
-    with np.load(npz_path) as z:
-        grid_lon = z["grid_lon"]
-        grid_lat = z["grid_lat"]
-        z_interp = z["z_interp"]
-        krig_var = z["kriging_variance"]
-        vmodel = None
-        for k in z.files:
-            if k.lower().startswith("meta_variogram_model") or k == "meta_variogram_model":
-                try:
-                    vmodel = str(z[k])
-                except Exception:
-                    vmodel = None
-                break
-        return grid_lon, grid_lat, z_interp, krig_var, vmodel
+def load_interp_nc(nc_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[str]]:
+    with xr.open_dataset(nc_path) as ds:
+        grid_lon = ds["lon"].values
+        grid_lat = ds["lat"].values
+        z_interp = ds["z_interp"].values
+        krig_var = ds["kriging_variance"].values
+        vmodel = ds.attrs.get("variogram_model", None)
+    return grid_lon, grid_lat, z_interp, krig_var, vmodel
 
 
 def load_variogram_csv(csv_path: str) -> Tuple[np.ndarray, np.ndarray]:
@@ -185,11 +179,11 @@ def main() -> int:
         pc.cfg["show_plots"] = False
 
     for dt in sel_dates:
-        npz_path = pairs[dt]["interp"]
+        nc_path  = pairs[dt]["interp"]
         csv_path = pairs[dt]["vario"]
 
         try:
-            grid_lon, grid_lat, z_interp, krig_var, vmodel = load_interp_npz(npz_path)
+            grid_lon, grid_lat, z_interp, krig_var, vmodel = load_interp_nc(nc_path)
             dist_km, semi_var = load_variogram_csv(csv_path)
         except Exception as e:
             print(f"[{dt}] failed to load exports: {e}")

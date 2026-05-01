@@ -48,7 +48,10 @@ ENV OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
-    MPLBACKEND=Agg
+    MPLBACKEND=Agg \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    HOME=/tmp
 
-ENTRYPOINT ["bash", "Scripts/dispatch_usgs_krig_range_subdaily.sh"]
-CMD ["configs/usgsgaugekrig.yaml"]
+
+ENTRYPOINT ["bash", "Scripts/run_qkrig_hourly.sh"]
+CMD []

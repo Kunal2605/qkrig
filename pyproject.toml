@@ -12,7 +12,10 @@ dependencies = [
     "scipy",
     "cartopy",
     "PyYAML",
-    "dataretrieval"
+    "dataretrieval",
+    "xarray",
+    "netcdf4",
+    "shapely"
 ]
 
 [build-system]

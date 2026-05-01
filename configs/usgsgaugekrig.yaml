@@ -6,10 +6,10 @@
 # ./usgs_hourly_retrieval_logs.
 
 data:
-  metadata_file: "./data/usgs_site_info.csv"
-  data_dir: "./data"
-  site_list_file: "./data/usgs_active_sites_Oct01_2024.txt"
-  data_cache_directory: "./usgs_hourly_retrieval_logs"
+  metadata_file: "../data/usgs_site_info.csv"
+  data_dir: "../data"
+  site_list_file: "../data/usgs_active_sites_Oct01_2024.txt"
+  data_cache_directory: "../usgs_hourly_retrieval_logs"
 settings:
   date_format: "%Y %m %d"
   add_random_sites: 0
@@ -18,7 +18,7 @@ settings:
   retry_backoff_seconds: 0.75
   min_area_km2: 0
   bbox: [-125, 24, -66, 50]
-plot_config: "./configs/plot_config.yaml"
+plot_config: "../configs/plot_config.yaml"
 kriging:
   grid_size: 100
   variogram_model: "spherical"
@@ -27,7 +27,7 @@ kriging:
   exact_values: False  # Ensure interpolation matches known points
   nlags: 25  # More lags improve variogram fitting
   weight: False  # Prioritize small distances for better sensitivity
-  range: 400  # Variogram range in meters (optional)
+  range: 100  # Variogram range in meters (optional)
   sill: 10
 exports:
-  directory: "./exports"   # where to write files
+  directory: "./exports"   # mounted as a volume in Docker; created if absent

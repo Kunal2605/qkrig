@@ -51,15 +51,15 @@ class USGSLoader(BaseLoader):
         dcfg = self.config.get("data", {})
         scfg = self.config.get("settings", {})
 
-        self.metadata_file: str = dcfg["metadata_file"]
-        self.site_list_file: Optional[str] = dcfg.get("site_list_file")
+        self.metadata_file: str = self._resolve_path(dcfg["metadata_file"])
+        self.site_list_file: Optional[str] = self._resolve_path(dcfg.get("site_list_file"))
         self.concurrency: int = int(scfg.get("concurrency", 16))
         self.max_retries: int = int(scfg.get("max_retries", 3))
         self.retry_backoff: float = float(scfg.get("retry_backoff_seconds", 0.75))
         self.min_area_km2: float = float(scfg.get("min_area_km2", 0.0))
         self.bbox: Optional[List[float]] = scfg.get("bbox")
         self.bbox_pad_deg: float = float(scfg.get("bbox_pad_deg", 0.0))
-        self.logs_dir = dcfg.get("data_cache_directory") or "usgs_retrieval_logs"
+        self.logs_dir = self._resolve_path(dcfg.get("data_cache_directory") or "usgs_retrieval_logs")
         os.makedirs(self.logs_dir, exist_ok=True)
 
     def _load_gauge_metadata(self) -> pd.DataFrame:
@@ -67,7 +67,7 @@ class USGSLoader(BaseLoader):
         scfg = self.config.get("settings", {})
 
         df = pd.read_csv(
-            dcfg["metadata_file"], comment="#", dtype={"site_no": str},
+            self._resolve_path(dcfg["metadata_file"]), comment="#", dtype={"site_no": str},
             on_bad_lines="skip", engine="python",
         )
         df = df.rename(columns={
@@ -86,7 +86,7 @@ class USGSLoader(BaseLoader):
         df = df[required].dropna()
         df["gauge_id"] = df["gauge_id"].str.zfill(8)
 
-        site_list_file = dcfg.get("site_list_file")
+        site_list_file = self._resolve_path(dcfg.get("site_list_file"))
         if site_list_file and os.path.exists(site_list_file):
             with open(site_list_file, "r") as f:
                 wanted = {line.strip().lstrip("0") for line in f if line.strip()}
@@ -95,7 +95,7 @@ class USGSLoader(BaseLoader):
         add_random = int(scfg.get("add_random_sites", 0))
         if add_random > 0:
             all_sites = pd.read_csv(
-                dcfg["metadata_file"], comment="#", dtype={"site_no": str},
+                self._resolve_path(dcfg["metadata_file"]), comment="#", dtype={"site_no": str},
                 on_bad_lines="skip", engine="python",
             )
             all_sites = all_sites.rename(columns={

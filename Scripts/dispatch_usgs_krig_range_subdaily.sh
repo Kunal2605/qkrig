@@ -24,9 +24,11 @@ set -euo pipefail
 # =============================================================================
 
 # ---- user knobs (same pattern as daily dispatch script) ----
-CONFIG="${1:-configs/usgsgaugekrig.yaml}"
-START_DATE="${2:-2023-05-01}"
-END_DATE="${3:-2023-05-31}"
+# Positional args take priority; env vars are the fallback (Docker-friendly).
+# Docker usage: docker run -e START_DATE=2024-01-01 -e END_DATE=2024-01-31 <image>
+CONFIG="${1:-${CONFIG:-configs/usgsgaugekrig.yaml}}"
+START_DATE="${2:-${START_DATE:-2023-05-01}}"
+END_DATE="${3:-${END_DATE:-2023-05-31}}"
 PLOT_CONFIG_OVERRIDE="${4:-}"    # optional; leave empty to use config's plot_config
 MAX_PROCS="${MAX_PROCS:-16}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -42,6 +44,10 @@ MIN_READINGS="${MIN_READINGS:-2}"
 
 # Skip kriging (Stage 1). Set SKIP_KRIG=1 to only do KV conversion.
 SKIP_KRIG="${SKIP_KRIG:-0}"
+
+# Ensure src/ modules (interpolation, core, loaders) are importable
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${SCRIPT_DIR}/../src${PYTHONPATH:+:$PYTHONPATH}"
 
 # Avoid thread oversubscription
 export OMP_NUM_THREADS=1
