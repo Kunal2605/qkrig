@@ -52,8 +52,6 @@ ENV OMP_NUM_THREADS=1 \
     MPLCONFIGDIR=/tmp/matplotlib \
     HOME=/tmp
 
-# /tmp is world-writable, so the matplotlib cache works even when the container
-# is run with --user $(id -u):$(id -g) (a UID that has no /etc/passwd entry).
 
 ENTRYPOINT ["bash", "Scripts/run_qkrig_hourly.sh"]
 CMD []
