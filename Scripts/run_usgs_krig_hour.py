@@ -288,7 +288,7 @@ def fetch_and_cache_all_hours(
 
             df = per_site.get(sid)
             if df is None or df.empty:
-                failures.append((sid, "nwis_empty"))
+                failures.append((sid, "no_iv_data_returned_from_nwis"))
                 continue
 
             # Extract readings for this hour
@@ -296,12 +296,12 @@ def fetch_and_cache_all_hours(
             hour_df = df[mask].dropna(subset=["cfs"])
 
             if len(hour_df) < min_readings:
-                failures.append((sid, "missing"))
+                failures.append((sid, "no_valid_readings_in_hour"))
                 continue
 
             mean_cfs = float(hour_df["cfs"].mean())
             if not np.isfinite(mean_cfs):
-                failures.append((sid, "missing"))
+                failures.append((sid, "nonfinite_mean_cfs"))
                 continue
 
             # Square miles -> square meters
@@ -309,7 +309,7 @@ def fetch_and_cache_all_hours(
             mm_hr = (mean_cfs * 0.0283168 * 3600.0 / area_m2) * 1000.0
 
             if not np.isfinite(mm_hr):
-                failures.append((sid, "missing"))
+                failures.append((sid, "nonfinite_mm_hr_after_unit_conversion"))
                 continue
 
             successes.append((lon, lat, mm_hr, sid))
