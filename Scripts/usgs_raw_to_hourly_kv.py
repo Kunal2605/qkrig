@@ -477,15 +477,15 @@ def main() -> int:
                         ok += 1
                         succ_for_log.append((sid, lon, lat, val))
                     else:
-                        append_kv_fail(kv, sid, "missing")
+                        append_kv_fail(kv, sid, "nonfinite_mm_hr_after_unit_conversion")
                         fail += 1
                 else:
                     if row["n_readings"] < min_readings:
-                        reason = f"insufficient_readings (n={int(row['n_readings'])} < {min_readings})"
+                        reason = f"insufficient_readings_n_{int(row['n_readings'])}_min_{min_readings}"
                     elif pd.isna(row.get("area_sq_mi")):
                         reason = "missing_drainage_area"
                     elif pd.isna(row["mm_hr"]):
-                        reason = "missing"
+                        reason = "nonfinite_mm_hr_after_unit_conversion"
                     else:
                         reason = "invalid_area"
                     append_kv_fail(kv, sid, reason)
