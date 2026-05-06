@@ -144,6 +144,7 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
     })
     df = df[["gauge_id", "gauge_lat", "gauge_lon", "area_sq_mi"]]
     df = df.dropna(subset=["gauge_lon", "gauge_lat"])
+    df["gauge_id"] = df["gauge_id"].str.zfill(8)
 
     # Filter by optional site list
     site_list_file = dcfg.get("site_list_file")
