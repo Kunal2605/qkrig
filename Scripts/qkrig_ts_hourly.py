@@ -36,20 +36,18 @@ def nc_path_for_hour(hr_str: str) -> str:
 
 
 def load_nc(nc_path: str):
-    """Return (lons, lats, z_mm_hr) from a qkrig NetCDF. Converts mm/day → mm/hr."""
+    """Return (lons, lats, z_mm_hr) from a qkrig hourly NetCDF."""
     with xr.open_dataset(nc_path) as ds:
         lons = ds["lon"].values
         lats = ds["lat"].values
-        z_mm_day = ds["z_interp"].values.astype(np.float64)
-    z_mm_hr = z_mm_day / 24.0
+        z_mm_hr = ds["z_interp"].values.astype(np.float64)
     return lons, lats, z_mm_hr
 
 
 def sample_centroid(lons, lats, grid, pt_lon, pt_lat) -> float:
     ix = np.argmin(np.abs(lons - pt_lon))
     iy = np.argmin(np.abs(lats - pt_lat))
-    val = float(grid[iy, ix])
-    return val if np.isfinite(val) else 0.0
+    return float(grid[iy, ix])
 
 
 def load_gpkg() -> gpd.GeoDataFrame:
