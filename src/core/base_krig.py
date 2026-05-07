@@ -265,7 +265,8 @@ class BaseKrig:
             },
         )
 
-        ds["z_interp"].attrs["units"]        = "mm/day"
+        units = "mm/hr" if self.hour is not None else "mm/day"
+        ds["z_interp"].attrs["units"]        = units
         ds["z_interp"].attrs["long_name"]    = "Kriged streamflow"
         ds["z_interp"].attrs["lat_order"]    = "S→N (CF convention); use origin='lower' with imshow"
         ds["kriging_variance"].attrs["long_name"] = "Kriging error variance"
