@@ -15,7 +15,7 @@ ENV PATH="/root/.local/bin:${PATH}"
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-RUN git clone --depth 1 https://github.com/DualEarth/qkrig.git /qkrig
+COPY . /qkrig
 
 WORKDIR /qkrig
 RUN uv pip install --system -e . \
@@ -41,8 +41,8 @@ COPY --from=builder /qkrig                                    /qkrig
 
 WORKDIR /qkrig
 
-RUN mkdir -p /qkrig/exports /qkrig/usgs_hourly_retrieval_logs
-VOLUME ["/qkrig/exports", "/qkrig/usgs_hourly_retrieval_logs"]
+RUN mkdir -p /qkrig/exports /qkrig/usgs_hourly_retrieval_logs /qkrig/hydrofabric
+VOLUME ["/qkrig/exports", "/qkrig/usgs_hourly_retrieval_logs", "/qkrig/hydrofabric"]
 
 ENV OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
@@ -50,7 +50,8 @@ ENV OMP_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
     MPLBACKEND=Agg \
     MPLCONFIGDIR=/tmp/matplotlib \
-    HOME=/tmp
+    HOME=/tmp \
+    PLOT_CONFIG=../configs/plot_config_docker.yaml
 
 
 ENTRYPOINT ["bash", "Scripts/run_qkrig_hourly.sh"]

@@ -15,11 +15,13 @@ __pycache__
 notebooks/
 
 # Local artifacts that shouldn't ship in the image.
-exports/
-usgs_hourly_retrieval_logs/
-usgs_hourly_retrieval_logs_test/
+exports*/
+usgs_hourly_retrieval_logs*
 usgs_retrieval_logs_test/
 usgs_retrieval_logs_test_Original/
+raw_iv_*/
+hydrofabric/
+catchment_csv/
 mnt/
 *.log
 

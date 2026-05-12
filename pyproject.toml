@@ -15,7 +15,9 @@ dependencies = [
     "dataretrieval",
     "xarray",
     "netcdf4",
-    "shapely"
+    "shapely",
+    "geopandas",
+    "pyogrio"
 ]
 
 [build-system]

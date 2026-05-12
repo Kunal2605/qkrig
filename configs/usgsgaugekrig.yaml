@@ -6,9 +6,9 @@
 # ./usgs_hourly_retrieval_logs.
 
 data:
-  metadata_file: "../data/usgs_site_info.csv"
+  metadata_file: "../data/usgs_iv_site_metadata.csv"
   data_dir: "../data"
-  site_list_file: "../data/usgs_active_sites_Oct01_2024.txt"
+  site_list_file: "../data/usgs_sites_iv.txt"
   data_cache_directory: "../usgs_hourly_retrieval_logs"
 settings:
   date_format: "%Y %m %d"
@@ -16,11 +16,11 @@ settings:
   concurrency: 16
   max_retries: 3
   retry_backoff_seconds: 0.75
-  min_area_km2: 0
+  min_area_km2: 1.0   
   bbox: [-125, 24, -66, 50]
 plot_config: "../configs/plot_config.yaml"
 kriging:
-  grid_size: 100
+  grid_size: 200
   variogram_model: "spherical"
   variogram_bins: 25
   nugget: 1 # Set to 0 for exact interpolation, increase slightly for smoothness
