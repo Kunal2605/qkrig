@@ -85,7 +85,18 @@ class PlotConfig:
 def _get_conus_mask(krig):
     """
     Boolean mask (ny, nx) True==inside CONUS, False==outside.
+
+    Prefers the BaseKrig instance's cached mask (built during NC export), which
+    avoids racing Natural Earth shapefile downloads when many hours are plotted
+    in parallel.
     """
+    cached = getattr(krig, "_get_conus_mask", None)
+    if callable(cached):
+        try:
+            return cached()
+        except Exception:
+            pass  # fall through to local build below
+
     ny, nx = krig.grid_lat.size, krig.grid_lon.size
     glon = krig.grid_lon.astype(float).copy()
     glon = ((glon + 180.0) % 360.0) - 180.0
@@ -221,10 +232,28 @@ class VariogramPlotter:
         ax.set_xlabel(self.config.get("xlabel", "Distance (km)"))
         ax.set_ylabel(self.config.get("ylabel", "Semi-variance"))
 
-        # Title with date
+        # Title: prefix + variogram model + date (+ hour when hourly)
         title_prefix = self.config.get("title_prefix", "Empirical Variogram")
         date_str = f"{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}"
-#        ax.set_title(f"{title_prefix} — {date_str}")
+        hour_str = f" {self.krig.hour:02d}:00 UTC" if getattr(self.krig, "hour", None) is not None else ""
+        model = getattr(self.krig, "variogram_model", None) or ""
+        model_part = f" ({model})" if model else ""
+        ax.set_title(f"{title_prefix}{model_part} — {date_str}{hour_str}")
+
+        # X-axis ticks: adaptive major spacing (so labels don't overlap for
+        # CONUS-scale ranges of ~4500 km) plus minor ticks every 100 km so the
+        # 100-km granularity is still visible as small tick marks.
+        if len(bin_centers) > 0:
+            from matplotlib.ticker import MultipleLocator
+            xmax = float(np.nanmax(bin_centers))
+            if   xmax <= 1000: major_step = 100
+            elif xmax <= 2500: major_step = 250
+            elif xmax <= 5000: major_step = 500
+            else:              major_step = 1000
+            ax.xaxis.set_major_locator(MultipleLocator(major_step))
+            ax.xaxis.set_minor_locator(MultipleLocator(100))
+            ax.set_xlim(left=0, right=xmax + 50)
+            ax.tick_params(axis="x", which="minor", length=3)
 
         # Axis limits / scale
         ymin_cfg = self.config.get("min_value", 1)
@@ -246,7 +275,8 @@ class VariogramPlotter:
             plots_dir = self.plot_cfg.cfg.get("plots_directory", "./plots")
             if save_plots:
                 os.makedirs(plots_dir, exist_ok=True)
-                fname = f"variogram_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}.png"
+                hour_suffix = f"_{self.krig.hour:02d}" if getattr(self.krig, "hour", None) is not None else ""
+                fname = f"variogram_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}{hour_suffix}.png"
                 fig.savefig(os.path.join(plots_dir, fname), dpi=300, bbox_inches="tight")
             if show_plots:
                 plt.show()
@@ -379,12 +409,13 @@ class KrigingMapPlotter:
                 vmax=None if norm is not None else vmax,
             )
 
-        # Labels & title
+        # Labels & title (date + hour when hourly)
         ax.set_xlabel(cfg.get("xlabel", "Longitude"))
         ax.set_ylabel(cfg.get("ylabel", "Latitude"))
         date_str = f"{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}"
+        hour_str = f" {self.krig.hour:02d}:00 UTC" if getattr(self.krig, "hour", None) is not None else ""
         ax.set_title(f"{cfg.get('title_prefix', 'Kriging Interpolation')} "
-                     f"({getattr(self.krig, 'variogram_model', 'restored')} model) — {date_str}")
+                     f"({getattr(self.krig, 'variogram_model', 'restored')} model) — {date_str}{hour_str}")
         if cfg.get("legend", True) and has_obs:
             ax.legend(loc="upper right")
 
@@ -395,19 +426,24 @@ class KrigingMapPlotter:
             plots_dir = self.plot_cfg.cfg.get("plots_directory", "./plots")
             if save_plots:
                 os.makedirs(plots_dir, exist_ok=True)
-                fname = f"kriging_interp_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}.png"
+                hour_suffix = f"_{self.krig.hour:02d}" if getattr(self.krig, "hour", None) is not None else ""
+                fname = f"kriging_interp_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}{hour_suffix}.png"
                 fig.savefig(os.path.join(plots_dir, fname), dpi=300, bbox_inches="tight")
             if show_plots:
                 plt.show()
             else:
                 plt.close(fig)
 
-    def plot_interpolation_with_variogram(self, heights=(3, 1), figsize=(9, 8)):
+    def plot_interpolation_with_variogram(self, figsize=(13, 6)):
         """
-        Stacked figure: map on top, short variogram underneath.
+        Side-by-side composite for one hour: kriged flow map (left) and
+        empirical variogram (right). Single PNG per call. Style matches the
+        viz_sep27_composite reference — helene_flow blue→purple cmap, PowerNorm
+        gamma=0.35 to keep low values visible, NaN rendered as parchment, no
+        axis ticks/spines on the map, percentile-based colorbar limits, clean
+        variogram with grid + p99 axis bounds.
         """
         combo_cfg = self.plot_cfg["combo"] if "combo" in self.plot_cfg.cfg else {}
-        heights = tuple(combo_cfg.get("heights", heights))
         figsize = tuple(combo_cfg.get("figure_size", figsize))
 
         if self.krig.z_interp is None:
@@ -415,14 +451,134 @@ class KrigingMapPlotter:
         if not self.krig.semivariogram_ready():
             raise RuntimeError("Semivariogram not computed. Call `krig.compute_semivariogram(...)` first.")
 
-        fig = plt.figure(figsize=figsize)
-        gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=heights, hspace=0.25)
-        ax_map = fig.add_subplot(gs[0, 0])
-        ax_var = fig.add_subplot(gs[1, 0])
+        from matplotlib.colors import LinearSegmentedColormap, PowerNorm
 
-        # draw into provided axes
-        self.plot_interpolation(ax=ax_map)
-        self.krig.variogram_plotter.plot(ax=ax_var)
+        FLOW_COLORS = ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5",
+                       "#084594", "#4a1486", "#7a0177"]
+        cmap = LinearSegmentedColormap.from_list("helene_flow", FLOW_COLORS, N=512)
+        cmap.set_bad(color="#e8e4dc")
+        POWER_GAMMA = 0.35
+
+        # Hourly kriging map, masked to CONUS + non-negative
+        z = self.krig.z_interp.astype(np.float32).copy()
+        try:
+            mask = _get_conus_mask(self.krig)
+            z[~mask] = np.nan
+        except Exception:
+            pass  # fall back to whatever's already in z (may already be masked)
+        z[z < 0] = np.nan
+
+        # Fixed bounds keep the colorbar constant across hours. Fall back to
+        # per-hour percentiles only if both bounds aren't set in plot config.
+        krig_cfg = self.plot_cfg.cfg.get("kriging_interpolation", {}) or {}
+        vmin_cfg = krig_cfg.get("min_value")
+        vmax_cfg = krig_cfg.get("max_value")
+
+        fin = z[np.isfinite(z)]
+        if vmin_cfg is not None and vmax_cfg is not None:
+            vmin, vmax = float(vmin_cfg), float(vmax_cfg)
+        elif fin.size:
+            vmin = max(float(np.percentile(fin, 1)), 0.0)
+            vmax = max(float(np.percentile(fin, 99)), vmin + 0.1)
+        else:
+            vmin, vmax = 0.0, 1.0
+        if vmin >= vmax:
+            vmax = vmin + 0.1
+        norm = PowerNorm(gamma=POWER_GAMMA, vmin=vmin, vmax=vmax)
+        hour_mean = float(np.nanmean(z)) if fin.size else float("nan")
+
+        H, W = z.shape
+        DISP = W / H
+
+        date_str = f"{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}"
+        hour_str = f"{self.krig.hour:02d}:00 UTC" if getattr(self.krig, "hour", None) is not None else ""
+        title_when = f"{date_str} {hour_str}".strip()
+
+        # wspace 0.32 prevents colorbar tick labels crowding the variogram axis.
+        fig, (ax_map, ax_v) = plt.subplots(
+            1, 2,
+            figsize=figsize,
+            facecolor="white",
+            gridspec_kw={"width_ratios": [1.6, 1], "wspace": 0.32},
+        )
+
+        # ----- Left: kriged flow map -----
+        im = ax_map.imshow(
+            np.clip(z, vmin, vmax),
+            origin="lower",
+            cmap=cmap,
+            norm=norm,
+            aspect=DISP,
+            interpolation="bilinear",
+        )
+        ax_map.set_xticks([]); ax_map.set_yticks([])
+        for sp in ax_map.spines.values():
+            sp.set_visible(False)
+        ax_map.set_xlabel(
+            f"Hour mean: {hour_mean:.3f} mm/hr",
+            fontsize=8, color="#333333",
+        )
+        ax_map.set_title(
+            f"{title_when}  —  Kriged Flow",
+            fontsize=11, fontweight="bold", pad=7,
+        )
+
+        cb = fig.colorbar(im, ax=ax_map, orientation="vertical",
+                          fraction=0.030, pad=0.02, shrink=0.82)
+        cb.set_label("Flow  (mm hr⁻¹)", fontsize=8.5, labelpad=6)
+        ticks = np.linspace(vmin, vmax, 6)
+        cb.set_ticks(ticks)
+        cb.ax.set_yticklabels([f"{v:.2f}" for v in ticks], fontsize=7.5)
+        cb.ax.tick_params(width=0.5, length=3)
+        cb.outline.set_linewidth(0.5)
+
+        # Right: variogram. variogram.{min_value,max_value,x_max} from config
+        # keep axes constant across hours; fall back to per-hour p99 otherwise.
+        var_cfg  = self.plot_cfg.cfg.get("variogram", {}) or {}
+        v_ymin   = var_cfg.get("min_value")
+        v_ymax   = var_cfg.get("max_value")
+        v_xmax   = var_cfg.get("x_max")
+
+        bin_centers, semi_variance = self.krig._semivar_cache
+        fin_sv = semi_variance[np.isfinite(semi_variance)]
+        fin_dist = bin_centers[np.isfinite(bin_centers)]
+
+        if v_xmax is not None:
+            dist_xmax = float(v_xmax)
+        else:
+            dist_xmax = (float(np.percentile(fin_dist, 99)) if fin_dist.size else 300.0) * 1.05
+
+        if v_ymin is not None and v_ymax is not None:
+            sv_ylim = (float(v_ymin), float(v_ymax))
+        else:
+            sv_ymax = float(np.percentile(fin_sv, 99)) if fin_sv.size else 1.0
+            sv_ylim = (0.0, sv_ymax * 1.10)
+
+        ax_v.scatter(
+            bin_centers, semi_variance,
+            s=40, color="#2171b5", alpha=0.65, linewidths=0, zorder=3,
+            label="Empirical",
+        )
+        ax_v.set_xlim(0, dist_xmax)
+        ax_v.set_ylim(*sv_ylim)
+        ax_v.set_xlabel("Distance  (km)", fontsize=9, color="#333")
+        ax_v.set_ylabel("Semi-variance", fontsize=9, color="#333")
+        model = getattr(self.krig, "variogram_model", None) or ""
+        model_part = f"  {model}" if model else ""
+        ax_v.set_title(
+            f"Variogram{model_part}  |  {hour_str}" if hour_str else f"Variogram{model_part}",
+            fontsize=9, fontweight="bold", pad=5,
+        )
+        ax_v.tick_params(labelsize=8, direction="out", width=0.5, length=3)
+        ax_v.spines["top"].set_visible(False)
+        ax_v.spines["right"].set_visible(False)
+        for sp in ["left", "bottom"]:
+            ax_v.spines[sp].set_linewidth(0.6)
+        ax_v.grid(True, alpha=0.2, lw=0.4, color="#888888")
+        if ax_v.get_legend_handles_labels()[0]:
+            leg = ax_v.legend(fontsize=8, framealpha=0.85,
+                              edgecolor="#aaaaaa", fancybox=False)
+            leg.get_frame().set_linewidth(0.5)
 
         # Save/show using global flags
         save_plots = self.plot_cfg.cfg.get("save_plots", False)
@@ -430,8 +586,9 @@ class KrigingMapPlotter:
         plots_dir = self.plot_cfg.cfg.get("plots_directory", "./plots")
         if save_plots:
             os.makedirs(plots_dir, exist_ok=True)
-            fname = f"kriging_combo_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}.png"
-            fig.savefig(os.path.join(plots_dir, fname), dpi=300, bbox_inches="tight")
+            hour_suffix = f"_{self.krig.hour:02d}" if getattr(self.krig, "hour", None) is not None else ""
+            fname = f"kriging_combo_{date_str}{hour_suffix}.png"
+            fig.savefig(os.path.join(plots_dir, fname), dpi=200, bbox_inches="tight")
 
         if show_plots:
             plt.show()
@@ -470,7 +627,8 @@ class KrigingMapPlotter:
 
         if save_plots:
             os.makedirs(plots_dir, exist_ok=True)
-            fname = f"kriging_error_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}.png"
+            hour_suffix = f"_{self.krig.hour:02d}" if getattr(self.krig, "hour", None) is not None else ""
+            fname = f"kriging_error_{self.krig.year:04d}-{self.krig.month:02d}-{self.krig.day:02d}{hour_suffix}.png"
             plt.savefig(os.path.join(plots_dir, fname), dpi=300, bbox_inches="tight")
 
         if show_plots:

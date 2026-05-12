@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-Run USGS kriging for a single HOUR.
+Run USGS kriging for a single HOUR — KV-cache-only.
 
-Data resolution order (mirrors the daily USGSLoader pattern):
-  1. Pre-built hourly KV file  →  <kv-dir>/YYYY-MM-DD_HH.kv.txt
-  2. If no KV file, fetch IV data from NWIS for ALL sites for that DATE,
-     compute hourly means, write KV caches for every hour of the day,
-     then proceed with kriging for the target hour.
+This script no longer fetches from NWIS. The hourly KV file at
+    <kv-dir>/YYYY-MM-DD_HH.kv.txt
+is a hard precondition. Populate it upstream with:
+    Scripts/usgs_raw_to_hourly_bulk.py  (raw .rdb per site)
+    Scripts/usgs_raw_to_hourly_kv.py    (raw → hourly KV, UTC-aware)
+
+The docker entrypoint (Scripts/run_qkrig_hourly.sh) calls those two scripts
+in its Stage 0 automatically, so the bulk → KV → krig flow is end-to-end.
 
 Exports are named with the hour:
-    interp_2023-05-01_14.npz   variogram_2023-05-01_14.csv
+    interp_2023-05-01_14.nc       variogram_2023-05-01_14.csv
 
 Usage:
     python Scripts/run_usgs_krig_hour.py \\
         --config configs/usgsgaugekrig.yaml \\
         --kv-dir /path/to/hourly_kv_output/ \\
         --year 2023 --month 5 --day 1 --hour 14
-
-    # Without --kv-dir it still works: fetches from NWIS, caches to
-    # the data_cache_directory in the config.
 """
 
 from __future__ import annotations
@@ -26,9 +26,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
-import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import List, Tuple, Optional
 
@@ -170,154 +167,6 @@ def load_gauge_metadata(cfg: dict) -> pd.DataFrame:
     return df.set_index("gauge_id")
 
 
-# ======================================================================
-# NWIS IV fetch (parallel, with retries — mirrors USGSLoader pattern)
-# ======================================================================
-def fetch_site_iv(
-    site_id: str,
-    date_str: str,
-    max_retries: int = 3,
-    retry_backoff: float = 0.75,
-) -> Tuple[str, Optional[pd.DataFrame]]:
-    """
-    Fetch instantaneous-value (IV) discharge for one site for one day.
-    Returns (site_id, DataFrame-or-None).
-    """
-    import dataretrieval.nwis as nwis
-
-    attempt = 0
-    while True:
-        try:
-            df = nwis.get_record(
-                sites=site_id,
-                service="iv",
-                start=date_str,
-                end=date_str,
-                parameterCd="00060",
-            )
-            if df is None or df.empty:
-                return (site_id, None)
-
-            # Find discharge column (00060, not the _cd quality column)
-            cols = [c for c in df.columns if "00060" in c and not c.endswith("_cd")]
-            if not cols:
-                return (site_id, None)
-
-            out = df[[cols[0]]].copy()
-            out = out.rename(columns={cols[0]: "cfs"})
-            out["cfs"] = pd.to_numeric(out["cfs"], errors="coerce")
-            out.loc[out["cfs"] < 0, "cfs"] = np.nan
-
-            if not isinstance(out.index, pd.DatetimeIndex):
-                out.index = pd.to_datetime(out.index)
-            return (site_id, out)
-
-        except Exception:
-            attempt += 1
-            if attempt > max_retries:
-                return (site_id, None)
-            sleep_s = retry_backoff * (1 + random.random()) * attempt
-            time.sleep(sleep_s)
-
-
-def fetch_and_cache_all_hours(
-    cfg: dict,
-    meta: pd.DataFrame,
-    kv_dir: str,
-    year: int, month: int, day: int,
-    min_readings: int = 1,
-) -> None:
-    """
-    Fetch IV data from NWIS for ALL sites for one day, compute hourly means,
-    and write KV files for every hour of the day.
-
-    This avoids redundant API calls when multiple hours from the same day
-    are being processed.
-    """
-    scfg = cfg.get("settings", {})
-    concurrency = int(scfg.get("concurrency", 16))
-    max_retries = int(scfg.get("max_retries", 3))
-    retry_backoff = float(scfg.get("retry_backoff_seconds", 0.75))
-
-    date_str = f"{year:04d}-{month:02d}-{day:02d}"
-    sites = list(meta.index.values)
-
-    print(f"  Fetching IV data from NWIS for {len(sites)} sites on {date_str}...")
-
-    # Parallel fetch
-    per_site: dict[str, Optional[pd.DataFrame]] = {}
-    with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        futures = {
-            ex.submit(fetch_site_iv, sid, date_str, max_retries, retry_backoff): sid
-            for sid in sites
-        }
-        done = 0
-        for fut in as_completed(futures):
-            sid = futures[fut]
-            _, df = fut.result()
-            per_site[sid] = df
-            done += 1
-            if done % 50 == 0 or done == len(sites):
-                print(f"    fetched {done}/{len(sites)} sites")
-
-    # Aggregate to hourly means and write KV files for each hour
-    for hour in range(24):
-        hr_str = f"{date_str}_{hour:02d}"
-        kv_path = kv_file_path(kv_dir, hr_str)
-
-        # Skip if already cached
-        if os.path.exists(kv_path):
-            continue
-
-        successes: List[Tuple[float, float, float, str]] = []
-        failures: List[Tuple[str, str]] = []
-
-        for sid in sites:
-            try:
-                row = meta.loc[sid]
-                lon = float(row["gauge_lon"])
-                lat = float(row["gauge_lat"])
-                area_sq_mi = float(row["area_sq_mi"])
-            except Exception:
-                failures.append((sid, "missing_metadata"))
-                continue
-
-            if not (np.isfinite(area_sq_mi) and area_sq_mi > 0):
-                failures.append((sid, "missing_drainage_area"))
-                continue
-
-            df = per_site.get(sid)
-            if df is None or df.empty:
-                failures.append((sid, "no_iv_data_returned_from_nwis"))
-                continue
-
-            # Extract readings for this hour
-            mask = df.index.hour == hour
-            hour_df = df[mask].dropna(subset=["cfs"])
-
-            if len(hour_df) < min_readings:
-                failures.append((sid, "no_valid_readings_in_hour"))
-                continue
-
-            mean_cfs = float(hour_df["cfs"].mean())
-            if not np.isfinite(mean_cfs):
-                failures.append((sid, "nonfinite_mean_cfs"))
-                continue
-
-            # Square miles -> square meters
-            area_m2 = area_sq_mi * 2.58999e6
-            mm_hr = (mean_cfs * 0.0283168 * 3600.0 / area_m2) * 1000.0
-
-            if not np.isfinite(mm_hr):
-                failures.append((sid, "nonfinite_mm_hr_after_unit_conversion"))
-                continue
-
-            successes.append((lon, lat, mm_hr, sid))
-
-        write_hourly_kv(kv_dir, hr_str, successes, failures)
-
-    print(f"  Cached KV files for all 24 hours of {date_str}.")
-
 
 # ======================================================================
 # Bbox filter
@@ -379,29 +228,34 @@ def main():
 
     if result is not None:
         successes, failures = result
+        # Re-apply metadata filter so config changes (min_area_km2, bbox,
+        # site_list) take effect on cached KV without forcing a re-fetch.
+        meta_check = load_gauge_metadata(cfg)
+        valid_ids = set(meta_check.index.values)
+        before = len(successes)
+        kept, dropped = [], 0
+        for rec in successes:
+            sid = rec[3]
+            if sid in valid_ids or sid.zfill(8) in valid_ids:
+                kept.append(rec)
+            else:
+                failures.append((sid, "filtered_by_metadata"))
+                dropped += 1
+        successes = kept
+        if dropped:
+            print(f"[{hr_str}] Filtered {dropped} cached sites via metadata "
+                  f"(min_area_km2 / bbox / site_list)")
         print(f"[{hr_str}] Loaded from KV cache ({len(successes)} OK, {len(failures)} FAIL)")
     else:
-        # --- No KV file: fetch from NWIS (mirrors USGSLoader behavior) ---
-        print(f"[{hr_str}] No KV cache found. Fetching from NWIS...")
-        meta = load_gauge_metadata(cfg)
-        if meta.empty:
-            print(f"[{hr_str}] No gauges after filtering. Skipping.")
-            return 0
-
-        # Fetch IV data for the full day and cache all 24 hours
-        fetch_and_cache_all_hours(
-            cfg, meta, kv_dir,
-            args.year, args.month, args.day,
-            min_readings=1,
+        # KV cache is a precondition — Stage 0 in run_qkrig_hourly.sh populates
+        # it via usgs_raw_to_hourly_bulk.py + usgs_raw_to_hourly_kv.py.
+        print(
+            f"ERROR: [{hr_str}] No KV file at {kv_file_path(kv_dir, hr_str)}. "
+            f"Populate the cache first via Stage 0 of run_qkrig_hourly.sh, or "
+            f"run usgs_raw_to_hourly_bulk.py + usgs_raw_to_hourly_kv.py directly.",
+            file=sys.stderr,
         )
-
-        # Now load the target hour's KV
-        result = load_hourly_kv(kv_dir, hr_str)
-        if result is None:
-            print(f"[{hr_str}] KV still missing after fetch. Skipping.")
-            return 0
-        successes, failures = result
-        print(f"[{hr_str}] Fetched and cached ({len(successes)} OK, {len(failures)} FAIL)")
+        return 2
 
     if not successes:
         print(f"[{hr_str}] No OK records. Skipping kriging.")
@@ -421,13 +275,24 @@ def main():
 
     # Create USGSKrig with hour so filenames and attrs include HH
     krig = USGSKrig(data, args.config, args.year, args.month, args.day, hour=args.hour)
-    krig.plot_config_path = plot_cfg_path
+    # USGSKrig.__init__ already built `variogram_plotter` and `krig_map_plotter`
+    # off the kriging YAML's `plot_config:` value (the notebook config). If the
+    # caller passed --plot-config (e.g. the Docker entrypoint pointing at the
+    # save-mode plot_config_docker.yaml), the plotters need to be rebuilt with
+    # the override before any plot method runs — otherwise their cached
+    # PlotConfig keeps `save_plots: false` and no PNGs get written.
+    if plot_cfg_path:
+        krig.plot_config_path = plot_cfg_path
+        from vis.visualizations import VariogramPlotter, KrigingMapPlotter
+        krig.variogram_plotter = VariogramPlotter(krig)
+        krig.krig_map_plotter = KrigingMapPlotter(krig)
 
     # Run pipeline
     krig.compute_semivariogram()
     krig.compute_kriging()
-    krig.plot_variogram()
-    krig.map_krig_interpolation()
+    # One composite PNG per hour (map + variogram side-by-side, polished style)
+    # instead of the older split into kriging_interp_*.png + variogram_*.png.
+    krig.plot_interpolation_with_variogram()
     interp_path, vario_path = krig.export_all()
 
     print(f"[{hr_str}] Exports:")

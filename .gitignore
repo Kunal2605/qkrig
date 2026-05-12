@@ -1,4 +1,9 @@
 *usgs_retrieval_logs*
+*usgs_hourly_retrieval_logs*
+exports*/
+raw_iv_*/
+hydrofabric/
+catchment_csv/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

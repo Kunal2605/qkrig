@@ -1,0 +1,52 @@
+save_plots: true
+show_plots: false
+plots_directory: "/qkrig/exports/plots/kriging"
+combo:
+  figure_size: [9, 8]
+  heights: [3, 1]
+variogram:
+  figure_size: [8, 5]
+  color: "blue"
+  marker: "o"
+  label: "Empirical Variogram"
+  xlabel: "Distance (km)"
+  ylabel: "Semi-variance"
+  title_prefix: "Empirical Variogram"
+  font_size: 12
+  legend: true
+  # Per-hour axis scaling (omit min_value/max_value/x_max to use percentiles).
+  # To pin axes constant across hours, set: min_value, max_value, x_max.
+  ylog: false
+
+kriging_interpolation:
+  render_mode: pcolormesh
+  norm: power
+  power_gamma: 0.3
+  figure_size: [8, 6]
+  cmap: "GnBu"
+  levels: 60
+  colorbar_label: "Interpolated Streamflow (mm/hr)"
+  # Per-hour color-scale (omit min_value/max_value to use percentiles).
+  # To pin colorbar constant across hours, set: min_value, max_value.
+  scatter:
+    cmap: "GnBu"
+    s: 1
+    edgecolors: "none"
+    label: "Observed Data"
+  xlabel: "Longitude"
+  ylabel: "Latitude"
+  title_prefix: "Kriging Interpolation"
+  font_size: 12
+  legend: true
+  log_scale: true
+  log_scale_base: 2
+
+kriging_error:
+  figure_size: [8, 6]
+  cmap: "viridis"
+  levels: 15
+  colorbar_label: "Kriging Error Variance"
+  xlabel: "Longitude"
+  ylabel: "Latitude"
+  title: "Kriging Error Variance Map"
+  font_size: 12
