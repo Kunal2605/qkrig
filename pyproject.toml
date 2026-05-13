@@ -17,7 +17,8 @@ dependencies = [
     "netcdf4",
     "shapely",
     "geopandas",
-    "pyogrio"
+    "pyogrio",
+    "pyarrow"
 ]
 
 [build-system]
